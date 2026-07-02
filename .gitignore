@@ -1,0 +1,23 @@
+# Binaries and build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage & profile output
+coverage.txt
+*.prof
+*.cpu
+*.mem
+
+# Benchmark output (kept local, not committed)
+bench.txt
+
+# Editor droppings
+.idea/
+.vscode/
+*.swp
+.DS_Store
