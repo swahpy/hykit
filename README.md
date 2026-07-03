@@ -17,6 +17,8 @@ go get github.com/swahpy/hykit@latest
 
 ### `cmap` — Concurrent map implementations
 
+> **v0.2.0 breaking change:** the interface is now generic (`Map[K comparable, V any]`) and every implementation supports `Delete`. Users of v0.1.0 must add explicit type parameters to constructor calls.
+
 Four `Map` implementations behind a shared interface, benchmarked head-to-head:
 
 - `MutexMap` — plain `sync.Mutex`; simplest, scales poorly.
@@ -27,9 +29,10 @@ Four `Map` implementations behind a shared interface, benchmarked head-to-head:
 ```go
 import "github.com/swahpy/hykit/cmap"
 
-m := cmap.NewShardedMap(1_000_000)
+m := cmap.NewShardedMap[string, string](1_000_000)
 m.Store("hello", "world")
 v, ok := m.Load("hello") // "world", true
+m.Delete("hello")
 ```
 
 Run benchmarks:
