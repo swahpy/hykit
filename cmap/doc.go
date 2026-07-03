@@ -5,6 +5,9 @@
 //	    Load(k K) (V, bool)
 //	    Store(k K, v V)
 //	    Delete(k K)
+//	    LoadOrStore(k K, v V) (actual V, loaded bool)
+//	    LoadAndDelete(k K) (value V, loaded bool)
+//	    Compute(k K, fn func(oldValue V, exists bool) V) (newValue V, existed bool)
 //	}
 //
 // So callers can pick the one that matches their workload and swap without

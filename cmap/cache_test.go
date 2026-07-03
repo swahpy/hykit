@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -183,6 +184,181 @@ func TestDelete(t *testing.T) {
 				t.Fatalf("Load(b): got (%q,%v), want (\"2\",true)", v, ok)
 			}
 			m.Delete("missing") // must not panic
+		})
+	}
+}
+
+// TestLoadOrStore — every impl must return the existing value without overwriting,
+// or store and return the new value if the key is absent. loaded reflects which.
+func TestLoadOrStore(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(2)
+
+			// Miss: stores and returns the passed value, loaded=false.
+			v, loaded := m.LoadOrStore("k", "first")
+			if loaded || v != "first" {
+				t.Fatalf("miss: got (%q, %v), want (\"first\", false)", v, loaded)
+			}
+
+			// Hit: returns existing value, loaded=true, does NOT overwrite.
+			v, loaded = m.LoadOrStore("k", "second")
+			if !loaded || v != "first" {
+				t.Fatalf("hit: got (%q, %v), want (\"first\", true)", v, loaded)
+			}
+
+			// Verify the value truly wasn't overwritten.
+			if got, _ := m.Load("k"); got != "first" {
+				t.Fatalf("overwrite check: got %q, want \"first\"", got)
+			}
+		})
+	}
+}
+
+// TestLoadAndDelete — every impl must atomically return the value and remove
+// the key. Deleting a missing key returns (zero, false) without panicking.
+func TestLoadAndDelete(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(2)
+			m.Store("k", "v")
+
+			// Present: returns value and true, then key is gone.
+			v, loaded := m.LoadAndDelete("k")
+			if !loaded || v != "v" {
+				t.Fatalf("present: got (%q, %v), want (\"v\", true)", v, loaded)
+			}
+			if _, ok := m.Load("k"); ok {
+				t.Fatal("key should be gone after LoadAndDelete")
+			}
+
+			// Absent: returns zero value and false.
+			v, loaded = m.LoadAndDelete("missing")
+			if loaded || v != "" {
+				t.Fatalf("absent: got (%q, %v), want (\"\", false)", v, loaded)
+			}
+		})
+	}
+}
+
+// TestLoadOrStoreConcurrent — the classic use case. Fire N goroutines that
+// all try to LoadOrStore the same key. Exactly ONE should get loaded=false
+// (the winner that actually stored); the rest should see loaded=true and
+// receive the winner's value.
+func TestLoadOrStoreConcurrent(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			const goroutines = 64
+			m := f.make(1)
+
+			var winners int64
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+			values := make([]string, goroutines)
+			loadeds := make([]bool, goroutines)
+
+			for i := 0; i < goroutines; i++ {
+				i := i
+				go func() {
+					defer wg.Done()
+					// Every goroutine offers a distinct value; only one should stick.
+					v, loaded := m.LoadOrStore("k", fmt.Sprintf("g%d", i))
+					values[i] = v
+					loadeds[i] = loaded
+					if !loaded {
+						atomic.AddInt64(&winners, 1)
+					}
+				}()
+			}
+			wg.Wait()
+
+			if winners != 1 {
+				t.Fatalf("winners: got %d, want exactly 1", winners)
+			}
+			// Every non-winner should have received the winner's value.
+			final, _ := m.Load("k")
+			for i, v := range values {
+				if v != final {
+					t.Fatalf("goroutine %d saw %q, but final value is %q", i, v, final)
+				}
+			}
+		})
+	}
+}
+
+// TestCompute — insert path, update path, and read-back verification for every impl.
+func TestCompute(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(2)
+
+			// Insert: key absent → exists=false, old is zero value, new value is stored.
+			newV, existed := m.Compute("k", func(old string, exists bool) string {
+				if exists {
+					t.Fatalf("insert: exists should be false, got true (old=%q)", old)
+				}
+				if old != "" {
+					t.Fatalf("insert: old should be zero value, got %q", old)
+				}
+				return "first"
+			})
+			if existed || newV != "first" {
+				t.Fatalf("insert: got (%q, %v), want (\"first\", false)", newV, existed)
+			}
+			if v, _ := m.Load("k"); v != "first" {
+				t.Fatalf("post-insert Load: got %q, want \"first\"", v)
+			}
+
+			// Update: key present → exists=true, old is prior value, new value replaces it.
+			newV, existed = m.Compute("k", func(old string, exists bool) string {
+				if !exists {
+					t.Fatalf("update: exists should be true")
+				}
+				if old != "first" {
+					t.Fatalf("update: old should be \"first\", got %q", old)
+				}
+				return old + "->second"
+			})
+			if !existed || newV != "first->second" {
+				t.Fatalf("update: got (%q, %v), want (\"first->second\", true)", newV, existed)
+			}
+			if v, _ := m.Load("k"); v != "first->second" {
+				t.Fatalf("post-update Load: got %q, want \"first->second\"", v)
+			}
+		})
+	}
+}
+
+// TestComputeConcurrentIncr — the canonical "N goroutines each +1" test.
+// If Compute is truly atomic, the final counter equals the number of goroutines.
+// If it's not, the value will be less due to lost updates.
+func TestComputeConcurrentIncr(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			const goroutines = 200
+			m := f.make(1)
+
+			// Store initial value as a numeric-string so we can round-trip through
+			// strconv without introducing an int-typed factory just for this test.
+			m.Store("count", "0")
+
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+			for i := 0; i < goroutines; i++ {
+				go func() {
+					defer wg.Done()
+					m.Compute("count", func(old string, _ bool) string {
+						n, _ := strconv.Atoi(old)
+						return strconv.Itoa(n + 1)
+					})
+				}()
+			}
+			wg.Wait()
+
+			got, _ := m.Load("count")
+			if got != strconv.Itoa(goroutines) {
+				t.Fatalf("final count: got %q, want %q — lost updates!", got, strconv.Itoa(goroutines))
+			}
 		})
 	}
 }

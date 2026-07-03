@@ -10,6 +10,24 @@ type Map[K comparable, V any] interface {
 	Load(k K) (V, bool)
 	Store(k K, v V)
 	Delete(k K)
+
+	// LoadOrStore returns the existing value for the key if present; otherwise
+	// stores and returns v. loaded is true iff the key was already present.
+	// The check-and-store is atomic — competing callers will see exactly one
+	// Store happen.
+	LoadOrStore(k K, v V) (actual V, loaded bool)
+
+	// LoadAndDelete atomically loads the value for the key and deletes it.
+	// loaded is true iff the key was present before the call.
+	LoadAndDelete(k K) (value V, loaded bool)
+
+	// Compute atomically transforms the value for k. fn is called under the
+	// map's lock with the current value and whether the key existed; the value
+	// fn returns replaces (or creates) the entry. If the key was absent when
+	// Compute was called, exists is false and oldValue is the zero value of V.
+	// The returned newValue is the value now stored; existed reports whether
+	// the key was present before the call.
+	Compute(k K, fn func(oldValue V, exists bool) V) (newValue V, existed bool)
 }
 
 // --- MutexMap ---
@@ -47,6 +65,35 @@ func (m *MutexMap[K, V]) Delete(k K) {
 	m.mu.Unlock()
 }
 
+func (m *MutexMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.m[k]; ok {
+		return existing, true
+	}
+	m.m[k] = v
+	return v, false
+}
+
+func (m *MutexMap[K, V]) LoadAndDelete(k K) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.m[k]
+	if ok {
+		delete(m.m, k)
+	}
+	return v, ok
+}
+
+func (m *MutexMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, existed := m.m[k]
+	newV := fn(old, existed)
+	m.m[k] = newV
+	return newV, existed
+}
+
 // --- RWMutexMap ---
 
 // RWMutexMap is a simple map protected by a read-write mutex.
@@ -82,11 +129,41 @@ func (m *RWMutexMap[K, V]) Delete(k K) {
 	m.mu.Unlock()
 }
 
+func (m *RWMutexMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.m[k]; ok {
+		return existing, true
+	}
+	m.m[k] = v
+	return v, false
+}
+
+func (m *RWMutexMap[K, V]) LoadAndDelete(k K) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.m[k]
+	if ok {
+		delete(m.m, k)
+	}
+	return v, ok
+}
+
+func (m *RWMutexMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	old, existed := m.m[k]
+	newV := fn(old, existed)
+	m.m[k] = newV
+	return newV, existed
+}
+
 // --- sync.Map ---
 
 // SyncMap is a generic wrapper around sync.Map.
 type SyncMap[K comparable, V any] struct {
-	m sync.Map
+	m         sync.Map
+	computeMu sync.Mutex // serializes Compute calls; Load/Store/Delete/etc. remain lock-free
 }
 
 // NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes no capacity hint — and is kept for API symmetry with the other constructors.
@@ -107,6 +184,34 @@ func (m *SyncMap[K, V]) Store(k K, v V) { m.m.Store(k, v) }
 
 // Delete removes k from the map.
 func (m *SyncMap[K, V]) Delete(k K) { m.m.Delete(k) }
+
+func (m *SyncMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
+	actual, loaded := m.m.LoadOrStore(k, v)
+	return actual.(V), loaded
+}
+
+func (m *SyncMap[K, V]) LoadAndDelete(k K) (V, bool) {
+	v, loaded := m.m.LoadAndDelete(k)
+	if !loaded {
+		var zero V
+		return zero, false
+	}
+	return v.(V), true
+}
+
+func (m *SyncMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
+	m.computeMu.Lock()
+	defer m.computeMu.Unlock()
+	var old V
+	existed := false
+	if raw, ok := m.m.Load(k); ok {
+		old = raw.(V)
+		existed = true
+	}
+	newV := fn(old, existed)
+	m.m.Store(k, newV)
+	return newV, existed
+}
 
 // --- Sharded Map ---
 
@@ -169,6 +274,38 @@ func (s *ShardedMap[K, V]) Delete(k K) {
 	p.mu.Lock()
 	delete(p.m, k)
 	p.mu.Unlock()
+}
+
+func (s *ShardedMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
+	sh := s.at(k)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if existing, ok := sh.m[k]; ok {
+		return existing, true
+	}
+	sh.m[k] = v
+	return v, false
+}
+
+func (s *ShardedMap[K, V]) LoadAndDelete(k K) (V, bool) {
+	sh := s.at(k)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	v, ok := sh.m[k]
+	if ok {
+		delete(sh.m, k)
+	}
+	return v, ok
+}
+
+func (s *ShardedMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
+	sh := s.at(k)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	old, existed := sh.m[k]
+	newV := fn(old, existed)
+	sh.m[k] = newV
+	return newV, existed
 }
 
 // Len returns the total number of entries in the sharded map.
