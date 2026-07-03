@@ -368,22 +368,37 @@ func TestCompute(t *testing.T) {
 }
 
 // TestComputeReturnsZero — returning V's zero value from fn is a valid store,
-// NOT a delete. Every impl must preserve this contract.
+// NOT a delete. Every impl must preserve this contract on both the update
+// (key present) and insert (key absent) paths.
 func TestComputeReturnsZero(t *testing.T) {
 	for _, f := range factories {
 		t.Run(f.name, func(t *testing.T) {
+			// Update-to-zero: seed a value, Compute returns "", key stays with "".
 			m := f.make(1)
 			m.Store("k", "v")
 
 			newV, existed := m.Compute("k", func(_ string, _ bool) string {
-				return "" // zero value for string
+				return ""
 			})
 			if !existed || newV != "" {
-				t.Fatalf("zero-return update: got (%q, %v), want (\"\", true)", newV, existed)
+				t.Fatalf("update-to-zero: got (%q, %v), want (\"\", true)", newV, existed)
 			}
 			v, ok := m.Load("k")
 			if !ok || v != "" {
-				t.Fatalf("post-Compute Load: got (%q, %v), want (\"\", true) — key must still exist with zero value", v, ok)
+				t.Fatalf("post-update Load: got (%q, %v), want (\"\", true) — key must still exist with zero value", v, ok)
+			}
+
+			// Insert-zero: fresh map, Compute on absent key returns "", key now exists with "".
+			m2 := f.make(1)
+			newV, existed = m2.Compute("k", func(_ string, _ bool) string {
+				return ""
+			})
+			if existed || newV != "" {
+				t.Fatalf("insert-zero: got (%q, %v), want (\"\", false)", newV, existed)
+			}
+			v, ok = m2.Load("k")
+			if !ok || v != "" {
+				t.Fatalf("post-insert Load: got (%q, %v), want (\"\", true) — insert-zero must store, not skip", v, ok)
 			}
 		})
 	}

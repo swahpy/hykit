@@ -30,6 +30,14 @@ type Map[K comparable, V any] interface {
 	Compute(k K, fn func(oldValue V, exists bool) V) (newValue V, existed bool)
 }
 
+// Compile-time proof each impl still satisfies Map[K, V].
+var (
+	_ Map[string, string] = (*MutexMap[string, string])(nil)
+	_ Map[string, string] = (*RWMutexMap[string, string])(nil)
+	_ Map[string, string] = (*SyncMap[string, string])(nil)
+	_ Map[string, string] = (*ShardedMap[string, string])(nil)
+)
+
 // --- MutexMap ---
 
 // MutexMap is a simple map protected by a mutex.

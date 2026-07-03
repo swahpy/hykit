@@ -21,7 +21,9 @@
 //     returns the zero value of V and loaded=false.
 //   - Compute always writes: returning the zero value from fn stores the zero
 //     value; there is no "leave the entry alone" or "delete" signal from fn.
-//     If you need conditional delete, do it explicitly with Delete.
+//     If you need conditional delete, do it explicitly with Delete. On
+//     SyncMap the implementation is lock-free (CAS retry loop), so fn may
+//     run more than once under contention — keep fn side-effect-free.
 //
 // SyncMap.Compute has an extra caveat: it relies on sync.Map.CompareAndSwap
 // and therefore requires V to be a runtime-comparable type. If your V is a
