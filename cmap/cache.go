@@ -5,6 +5,7 @@ import (
 	"sync"
 )
 
+// Map is the common interface satisfied by every map implementation in this package.
 type Map interface {
 	Load(k string) (string, bool)
 	Store(k, v string)
@@ -18,10 +19,12 @@ type MutexMap struct {
 	m  map[string]string
 }
 
+// NewMutexMap returns a MutexMap preallocated for size entries.
 func NewMutexMap(size int) *MutexMap {
 	return &MutexMap{m: make(map[string]string, size)}
 }
 
+// Load returns the value for k and whether it was present.
 func (m *MutexMap) Load(k string) (string, bool) {
 	m.mu.Lock()
 	v, ok := m.m[k]
@@ -29,6 +32,7 @@ func (m *MutexMap) Load(k string) (string, bool) {
 	return v, ok
 }
 
+// Store sets k to v.
 func (m *MutexMap) Store(k, v string) {
 	m.mu.Lock()
 	m.m[k] = v
@@ -43,10 +47,12 @@ type RWMutexMap struct {
 	m  map[string]string
 }
 
+// NewRWMutexMap returns an RWMutexMap preallocated for size entries.
 func NewRWMutexMap(size int) *RWMutexMap {
 	return &RWMutexMap{m: make(map[string]string, size)}
 }
 
+// Load returns the value for k and whether it was present.
 func (m *RWMutexMap) Load(k string) (string, bool) {
 	m.mu.RLock()
 	v, ok := m.m[k]
@@ -54,6 +60,7 @@ func (m *RWMutexMap) Load(k string) (string, bool) {
 	return v, ok
 }
 
+// Store sets k to v.
 func (m *RWMutexMap) Store(k, v string) {
 	m.mu.Lock()
 	m.m[k] = v
@@ -62,13 +69,15 @@ func (m *RWMutexMap) Store(k, v string) {
 
 // --- sync.Map ---
 
-// SyncMap is a simple map using sync.Map.
+// SyncMap is a string-typed wrapper around sync.Map.
 type SyncMap struct {
 	m sync.Map
 }
 
-func NewSyncMap(size int) *SyncMap { return &SyncMap{} }
+// NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes no capacity hint — and is kept for API symmetry with the other constructors.
+func NewSyncMap(_ int) *SyncMap { return &SyncMap{} }
 
+// Load returns the value for k and whether it was present.
 func (m *SyncMap) Load(k string) (string, bool) {
 	v, ok := m.m.Load(k)
 	if !ok {
@@ -77,6 +86,7 @@ func (m *SyncMap) Load(k string) (string, bool) {
 	return v.(string), true
 }
 
+// Store sets k to v.
 func (m *SyncMap) Store(k, v string) {
 	m.m.Store(k, v)
 }
@@ -84,26 +94,27 @@ func (m *SyncMap) Store(k, v string) {
 // --- Sharded Map ---
 
 const (
-	sNumShards = 256            // power of two → mask instead of modulo
-	sShardMask = sNumShards - 1 // [0 - sShardMask] shards to hold the map entries
+	numShards = 256           // power of two → mask instead of modulo
+	shardMask = numShards - 1 // [0 - shardMask] shards to hold the map entries
 )
 
-// Shard is a single shard of the sharded map, containing a mutex and a map.
-type Shard struct {
+// shard is a single shard of the sharded map, containing a mutex and a map.
+type shard struct {
 	mu sync.Mutex
 	m  map[string]string
 	_  [48]byte // pad shard to a full 64B cache line (8 + 8 + 48 = 64)
 }
 
-// ShardMap is a sharded map that partitions the key space across N shards, each with its own mutex.
+// ShardedMap is a sharded map that partitions the key space across N shards, each with its own mutex.
 type ShardedMap struct {
-	shards [sNumShards]Shard
+	shards [numShards]shard
 	seed   maphash.Seed
 }
 
+// NewShardedMap returns a ShardedMap. size is a total-capacity hint spread evenly across shards.
 func NewShardedMap(size int) *ShardedMap {
 	s := &ShardedMap{seed: maphash.MakeSeed()}
-	per := size/sNumShards + 1
+	per := size/numShards + 1
 	for i := range s.shards {
 		s.shards[i].m = make(map[string]string, per)
 	}
@@ -112,8 +123,8 @@ func NewShardedMap(size int) *ShardedMap {
 
 // at returns the shard for a given key. It uses maphash to hash
 // the key and then masks it to find the appropriate shard index.
-func (s *ShardedMap) at(key string) *Shard {
-	return &s.shards[maphash.String(s.seed, key)&sShardMask]
+func (s *ShardedMap) at(key string) *shard {
+	return &s.shards[maphash.String(s.seed, key)&shardMask]
 }
 
 // Load retrieves the value for a key from the sharded map.

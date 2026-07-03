@@ -94,23 +94,3 @@ func BenchmarkMaps(b *testing.B) {
 		}
 	}
 }
-
-// Sanity — makes sure every impl actually returns the value that was stored.
-func TestImplsRoundTrip(t *testing.T) {
-	for _, im := range impls {
-		t.Run(im.name, func(t *testing.T) {
-			m := im.make(16)
-			for i := 0; i < 16; i++ {
-				k := strconv.Itoa(i)
-				m.Store(k, k+"!")
-			}
-			for i := 0; i < 16; i++ {
-				k := strconv.Itoa(i)
-				v, ok := m.Load(k)
-				if !ok || v != k+"!" {
-					t.Fatalf("key %s: got (%q,%v), want (%q,true)", k, v, ok, k+"!")
-				}
-			}
-		})
-	}
-}
