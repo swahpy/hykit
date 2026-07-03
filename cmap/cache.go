@@ -5,27 +5,28 @@ import (
 	"sync"
 )
 
-// Map is the common interface satisfied by every map implementation in this package.
-type Map interface {
-	Load(k string) (string, bool)
-	Store(k, v string)
+// Map is the common interface satisfied by every implementation in this package.
+type Map[K comparable, V any] interface {
+	Load(k K) (V, bool)
+	Store(k K, v V)
+	Delete(k K)
 }
 
 // --- MutexMap ---
 
 // MutexMap is a simple map protected by a mutex.
-type MutexMap struct {
+type MutexMap[K comparable, V any] struct {
 	mu sync.Mutex
-	m  map[string]string
+	m  map[K]V
 }
 
 // NewMutexMap returns a MutexMap preallocated for size entries.
-func NewMutexMap(size int) *MutexMap {
-	return &MutexMap{m: make(map[string]string, size)}
+func NewMutexMap[K comparable, V any](size int) *MutexMap[K, V] {
+	return &MutexMap[K, V]{m: make(map[K]V, size)}
 }
 
 // Load returns the value for k and whether it was present.
-func (m *MutexMap) Load(k string) (string, bool) {
+func (m *MutexMap[K, V]) Load(k K) (V, bool) {
 	m.mu.Lock()
 	v, ok := m.m[k]
 	m.mu.Unlock()
@@ -33,27 +34,34 @@ func (m *MutexMap) Load(k string) (string, bool) {
 }
 
 // Store sets k to v.
-func (m *MutexMap) Store(k, v string) {
+func (m *MutexMap[K, V]) Store(k K, v V) {
 	m.mu.Lock()
 	m.m[k] = v
+	m.mu.Unlock()
+}
+
+// Delete removes k from the map.
+func (m *MutexMap[K, V]) Delete(k K) {
+	m.mu.Lock()
+	delete(m.m, k)
 	m.mu.Unlock()
 }
 
 // --- RWMutexMap ---
 
 // RWMutexMap is a simple map protected by a read-write mutex.
-type RWMutexMap struct {
+type RWMutexMap[K comparable, V any] struct {
 	mu sync.RWMutex
-	m  map[string]string
+	m  map[K]V
 }
 
 // NewRWMutexMap returns an RWMutexMap preallocated for size entries.
-func NewRWMutexMap(size int) *RWMutexMap {
-	return &RWMutexMap{m: make(map[string]string, size)}
+func NewRWMutexMap[K comparable, V any](size int) *RWMutexMap[K, V] {
+	return &RWMutexMap[K, V]{m: make(map[K]V, size)}
 }
 
 // Load returns the value for k and whether it was present.
-func (m *RWMutexMap) Load(k string) (string, bool) {
+func (m *RWMutexMap[K, V]) Load(k K) (V, bool) {
 	m.mu.RLock()
 	v, ok := m.m[k]
 	m.mu.RUnlock()
@@ -61,35 +69,44 @@ func (m *RWMutexMap) Load(k string) (string, bool) {
 }
 
 // Store sets k to v.
-func (m *RWMutexMap) Store(k, v string) {
+func (m *RWMutexMap[K, V]) Store(k K, v V) {
 	m.mu.Lock()
 	m.m[k] = v
 	m.mu.Unlock()
 }
 
+// Delete removes k from the map.
+func (m *RWMutexMap[K, V]) Delete(k K) {
+	m.mu.Lock()
+	delete(m.m, k)
+	m.mu.Unlock()
+}
+
 // --- sync.Map ---
 
-// SyncMap is a string-typed wrapper around sync.Map.
-type SyncMap struct {
+// SyncMap is a generic wrapper around sync.Map.
+type SyncMap[K comparable, V any] struct {
 	m sync.Map
 }
 
 // NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes no capacity hint — and is kept for API symmetry with the other constructors.
-func NewSyncMap(_ int) *SyncMap { return &SyncMap{} }
+func NewSyncMap[K comparable, V any](_ int) *SyncMap[K, V] { return &SyncMap[K, V]{} }
 
 // Load returns the value for k and whether it was present.
-func (m *SyncMap) Load(k string) (string, bool) {
+func (m *SyncMap[K, V]) Load(k K) (V, bool) {
+	var zero V
 	v, ok := m.m.Load(k)
 	if !ok {
-		return "", false
+		return zero, false
 	}
-	return v.(string), true
+	return v.(V), true
 }
 
 // Store sets k to v.
-func (m *SyncMap) Store(k, v string) {
-	m.m.Store(k, v)
-}
+func (m *SyncMap[K, V]) Store(k K, v V) { m.m.Store(k, v) }
+
+// Delete removes k from the map.
+func (m *SyncMap[K, V]) Delete(k K) { m.m.Delete(k) }
 
 // --- Sharded Map ---
 
@@ -99,38 +116,38 @@ const (
 )
 
 // shard is a single shard of the sharded map, containing a mutex and a map.
-type shard struct {
+type shard[K comparable, V any] struct {
 	mu sync.Mutex
-	m  map[string]string
+	m  map[K]V
 	_  [48]byte // pad shard to a full 64B cache line (8 + 8 + 48 = 64)
 }
 
 // ShardedMap is a sharded map that partitions the key space across N shards, each with its own mutex.
-type ShardedMap struct {
-	shards [numShards]shard
+type ShardedMap[K comparable, V any] struct {
+	shards [numShards]shard[K, V]
 	seed   maphash.Seed
 }
 
 // NewShardedMap returns a ShardedMap. size is a total-capacity hint spread evenly across shards.
-func NewShardedMap(size int) *ShardedMap {
-	s := &ShardedMap{seed: maphash.MakeSeed()}
+func NewShardedMap[K comparable, V any](size int) *ShardedMap[K, V] {
+	s := &ShardedMap[K, V]{seed: maphash.MakeSeed()}
 	per := size/numShards + 1
 	for i := range s.shards {
-		s.shards[i].m = make(map[string]string, per)
+		s.shards[i].m = make(map[K]V, per)
 	}
 	return s
 }
 
 // at returns the shard for a given key. It uses maphash to hash
 // the key and then masks it to find the appropriate shard index.
-func (s *ShardedMap) at(key string) *shard {
-	return &s.shards[maphash.String(s.seed, key)&shardMask]
+func (s *ShardedMap[K, V]) at(k K) *shard[K, V] {
+	return &s.shards[maphash.Comparable(s.seed, k)&shardMask]
 }
 
 // Load retrieves the value for a key from the sharded map.
 // It locks the shard's mutex for reading, retrieves the value,
 // and then unlocks the mutex.
-func (s *ShardedMap) Load(k string) (string, bool) {
+func (s *ShardedMap[K, V]) Load(k K) (V, bool) {
 	p := s.at(k)
 	p.mu.Lock()
 	v, ok := p.m[k]
@@ -139,7 +156,7 @@ func (s *ShardedMap) Load(k string) (string, bool) {
 }
 
 // Store sets the value for a key in the sharded map.
-func (s *ShardedMap) Store(k, v string) {
+func (s *ShardedMap[K, V]) Store(k K, v V) {
 	p := s.at(k)
 	p.mu.Lock()
 	p.m[k] = v
@@ -147,7 +164,7 @@ func (s *ShardedMap) Store(k, v string) {
 }
 
 // Delete removes the key from the sharded map.
-func (s *ShardedMap) Delete(k string) {
+func (s *ShardedMap[K, V]) Delete(k K) {
 	p := s.at(k)
 	p.mu.Lock()
 	delete(p.m, k)
@@ -158,7 +175,7 @@ func (s *ShardedMap) Delete(k string) {
 // It is O(numShards) and NOT a consistent snapshot — entries
 // can be added/removed in other shards while we're counting.
 // Fine for metrics, wrong for anything that needs a true point-in-time count.
-func (s *ShardedMap) Len() int {
+func (s *ShardedMap[K, V]) Len() int {
 	n := 0
 	for i := range s.shards {
 		p := &s.shards[i]

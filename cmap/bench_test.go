@@ -20,14 +20,14 @@ const numKeys = 1_000_000
 
 type impl struct {
 	name string
-	make func(size int) Map
+	make func(size int) Map[string, string]
 }
 
 var impls = []impl{
-	{"mutex", func(n int) Map { return NewMutexMap(n) }},
-	{"rwmutex", func(n int) Map { return NewRWMutexMap(n) }},
-	{"syncmap", func(n int) Map { return NewSyncMap(n) }},
-	{"sharded", func(n int) Map { return NewShardedMap(n) }},
+	{"mutex", func(n int) Map[string, string] { return NewMutexMap[string, string](n) }},
+	{"rwmutex", func(n int) Map[string, string] { return NewRWMutexMap[string, string](n) }},
+	{"syncmap", func(n int) Map[string, string] { return NewSyncMap[string, string](n) }},
+	{"sharded", func(n int) Map[string, string] { return NewShardedMap[string, string](n) }},
 }
 
 type mix struct {
@@ -54,7 +54,7 @@ var keys = func() []string {
 
 // prewarm loads every key so Load hits are realistic and shards are already
 // sized.
-func prewarm(m Map) {
+func prewarm(m Map[string, string]) {
 	for _, k := range keys {
 		m.Store(k, k)
 	}

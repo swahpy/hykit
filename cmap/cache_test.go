@@ -11,12 +11,12 @@ import (
 // the Map interface, so one table covers them all.
 var factories = []struct {
 	name string
-	make func(size int) Map
+	make func(size int) Map[string, string]
 }{
-	{"MutexMap", func(n int) Map { return NewMutexMap(n) }},
-	{"RWMutexMap", func(n int) Map { return NewRWMutexMap(n) }},
-	{"SyncMap", func(n int) Map { return NewSyncMap(n) }},
-	{"ShardedMap", func(n int) Map { return NewShardedMap(n) }},
+	{"MutexMap", func(n int) Map[string, string] { return NewMutexMap[string, string](n) }},
+	{"RWMutexMap", func(n int) Map[string, string] { return NewRWMutexMap[string, string](n) }},
+	{"SyncMap", func(n int) Map[string, string] { return NewSyncMap[string, string](n) }},
+	{"ShardedMap", func(n int) Map[string, string] { return NewShardedMap[string, string](n) }},
 }
 
 // TestLoadMissing — an empty map returns (zero, false) for any key.
@@ -168,28 +168,29 @@ func TestConcurrentReadersWriter(t *testing.T) {
 	}
 }
 
-// --- ShardedMap-specific tests ---
-
-func TestShardedMap_Delete(t *testing.T) {
-	m := NewShardedMap(4)
-	m.Store("a", "1")
-	m.Store("b", "2")
-
-	m.Delete("a")
-
-	if v, ok := m.Load("a"); ok {
-		t.Fatalf("Load after Delete: got (%q,true), want (_,false)", v)
+// TestDelete — every impl implements Delete after v0.2.0.
+func TestDelete(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(2)
+			m.Store("a", "1")
+			m.Store("b", "2")
+			m.Delete("a")
+			if v, ok := m.Load("a"); ok {
+				t.Fatalf("Load after Delete: got (%q,true), want (_,false)", v)
+			}
+			if v, ok := m.Load("b"); !ok || v != "2" {
+				t.Fatalf("Load(b): got (%q,%v), want (\"2\",true)", v, ok)
+			}
+			m.Delete("missing") // must not panic
+		})
 	}
-	if v, ok := m.Load("b"); !ok || v != "2" {
-		t.Fatalf("Load(b): got (%q,%v), want (\"2\",true)", v, ok)
-	}
-
-	// Deleting a missing key is a no-op, not a panic.
-	m.Delete("missing")
 }
 
+// --- ShardedMap-specific tests ---
+
 func TestShardedMap_Len(t *testing.T) {
-	m := NewShardedMap(0)
+	m := NewShardedMap[string, string](0)
 	if got := m.Len(); got != 0 {
 		t.Fatalf("Len on empty: %d, want 0", got)
 	}
@@ -215,5 +216,52 @@ func TestShardedMap_Len(t *testing.T) {
 	}
 	if got := m.Len(); got != n/2 {
 		t.Fatalf("Len after deletes: %d, want %d", got, n/2)
+	}
+}
+
+// TestGenericTypes — smoke test that all four impls compile & work with a
+// non-string key/value combo. int -> struct is a decent stand-in.
+func TestGenericTypes(t *testing.T) {
+	type payload struct{ x, y int }
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{"MutexMap", func(t *testing.T) {
+			m := NewMutexMap[int, payload](0)
+			m.Store(1, payload{2, 3})
+			if v, ok := m.Load(1); !ok || v != (payload{2, 3}) {
+				t.Fatalf("got (%v,%v)", v, ok)
+			}
+		}},
+		{"RWMutexMap", func(t *testing.T) {
+			m := NewRWMutexMap[int, payload](0)
+			m.Store(1, payload{2, 3})
+			if v, ok := m.Load(1); !ok || v != (payload{2, 3}) {
+				t.Fatalf("got (%v,%v)", v, ok)
+			}
+		}},
+		{"SyncMap", func(t *testing.T) {
+			m := NewSyncMap[int, payload](0)
+			m.Store(1, payload{2, 3})
+			if v, ok := m.Load(1); !ok || v != (payload{2, 3}) {
+				t.Fatalf("got (%v,%v)", v, ok)
+			}
+		}},
+		{"ShardedMap", func(t *testing.T) {
+			m := NewShardedMap[int, payload](0)
+			m.Store(1, payload{2, 3})
+			if v, ok := m.Load(1); !ok || v != (payload{2, 3}) {
+				t.Fatalf("got (%v,%v)", v, ok)
+			}
+			m.Delete(1)
+			if _, ok := m.Load(1); ok {
+				t.Fatal("Delete had no effect")
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, c.run)
 	}
 }
