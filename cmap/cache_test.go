@@ -404,6 +404,48 @@ func TestComputeReturnsZero(t *testing.T) {
 	}
 }
 
+// TestComputeReturnsZeroConcurrent — insert-zero under contention. N goroutines
+// race to Compute on the same absent key, each returning V's zero value.
+// Exactly one goroutine should observe exists=false (the inserter); the rest
+// should observe exists=true and see the zero value already stored. Final
+// Load must return (zeroValue, true) — the key exists with the zero value,
+// it wasn't skipped or deleted.
+func TestComputeReturnsZeroConcurrent(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			const goroutines = 32
+			m := f.make(1)
+
+			var inserters int64
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+			for i := 0; i < goroutines; i++ {
+				go func() {
+					defer wg.Done()
+					newV, existed := m.Compute("k", func(_ string, _ bool) string {
+						return "" // insert-zero
+					})
+					if newV != "" {
+						t.Errorf("newV: got %q, want \"\"", newV)
+					}
+					if !existed {
+						atomic.AddInt64(&inserters, 1)
+					}
+				}()
+			}
+			wg.Wait()
+
+			if inserters != 1 {
+				t.Fatalf("inserters: got %d, want exactly 1", inserters)
+			}
+			v, ok := m.Load("k")
+			if !ok || v != "" {
+				t.Fatalf("post-Compute Load: got (%q, %v), want (\"\", true) — key must exist with zero value", v, ok)
+			}
+		})
+	}
+}
+
 // TestComputeAfterDelete — after Delete, Compute must see exists=false and zero old.
 func TestComputeAfterDelete(t *testing.T) {
 	for _, f := range factories {

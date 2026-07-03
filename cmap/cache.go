@@ -286,27 +286,27 @@ func (s *ShardedMap[K, V]) at(k K) *shard[K, V] {
 // It locks the shard's mutex for reading, retrieves the value,
 // and then unlocks the mutex.
 func (s *ShardedMap[K, V]) Load(k K) (V, bool) {
-	p := s.at(k)
-	p.mu.Lock()
-	v, ok := p.m[k]
-	p.mu.Unlock()
+	sh := s.at(k)
+	sh.mu.Lock()
+	v, ok := sh.m[k]
+	sh.mu.Unlock()
 	return v, ok
 }
 
 // Store sets the value for a key in the sharded map.
 func (s *ShardedMap[K, V]) Store(k K, v V) {
-	p := s.at(k)
-	p.mu.Lock()
-	p.m[k] = v
-	p.mu.Unlock()
+	sh := s.at(k)
+	sh.mu.Lock()
+	sh.m[k] = v
+	sh.mu.Unlock()
 }
 
 // Delete removes the key from the sharded map.
 func (s *ShardedMap[K, V]) Delete(k K) {
-	p := s.at(k)
-	p.mu.Lock()
-	delete(p.m, k)
-	p.mu.Unlock()
+	sh := s.at(k)
+	sh.mu.Lock()
+	delete(sh.m, k)
+	sh.mu.Unlock()
 }
 
 func (s *ShardedMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
@@ -348,10 +348,10 @@ func (s *ShardedMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
 func (s *ShardedMap[K, V]) Len() int {
 	n := 0
 	for i := range s.shards {
-		p := &s.shards[i]
-		p.mu.Lock()
-		n += len(p.m)
-		p.mu.Unlock()
+		sh := &s.shards[i]
+		sh.mu.Lock()
+		n += len(sh.m)
+		sh.mu.Unlock()
 	}
 	return n
 }

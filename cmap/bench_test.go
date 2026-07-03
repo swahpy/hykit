@@ -52,6 +52,21 @@ var keys = func() []string {
 	return ks
 }()
 
+// randStrings are pre-formatted so benchmarks that need a "distinct-ish
+// per-iteration string value" don't pay strconv.FormatUint's allocation on
+// every hot-loop iteration. 1024 entries is enough variety to defeat
+// trivial "same value twice in a row" CAS shortcuts.
+var randStrings = func() []string {
+	const n = 1024
+	ss := make([]string, n)
+	// Use the same "just outside the pre-warmed range" numeric domain so
+	// if a benchmark uses these as keys they're guaranteed to be misses.
+	for i := range ss {
+		ss[i] = strconv.FormatUint(uint64(numKeys)+uint64(i)*7919, 10)
+	}
+	return ss
+}()
+
 // prewarm loads every key so Load hits are realistic and shards are already
 // sized.
 func prewarm(m Map[string, string]) {
@@ -117,9 +132,9 @@ func BenchmarkLoadOrStore(b *testing.B) {
 	}
 }
 
-// BenchmarkLoadOrStoreMiss — every op is a miss (fresh key beyond the
-// pre-warmed keyspace), forcing the write-lock / upgrade path on impls that
-// have one. Complements BenchmarkLoadOrStore's 100%-hit workload.
+// BenchmarkLoadOrStoreMiss — every op is a miss with overwhelmingly high
+// probability, forcing the write-lock / upgrade path on impls that have one.
+// Complements BenchmarkLoadOrStore's 100%-hit workload.
 func BenchmarkLoadOrStoreMiss(b *testing.B) {
 	for _, im := range impls {
 		b.Run(im.name, func(b *testing.B) {
@@ -132,10 +147,9 @@ func BenchmarkLoadOrStoreMiss(b *testing.B) {
 			b.RunParallel(func(pb *testing.PB) {
 				r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 				for pb.Next() {
-					// Keys guaranteed outside the pre-warmed range, so each
-					// LoadOrStore is a miss for the map (though later ops may
-					// hit if the same tag is drawn twice).
-					tag := numKeys + r.Uint64N(numKeys)
+					// Draw tags from a much larger space than numKeys so misses stay dominant
+					// even under long -benchtime runs. Collisions are statistically negligible.
+					tag := numKeys + r.Uint64N(1<<40)
 					k := strconv.FormatUint(tag, 10)
 					_, _ = m.LoadOrStore(k, k)
 				}
@@ -190,9 +204,9 @@ func BenchmarkComputeHotKey(b *testing.B) {
 				for pb.Next() {
 					// Return a value derived from a random tag so CAS never
 					// trivially swaps "same to same".
-					tag := r.Uint64()
+					next := randStrings[r.Uint64N(uint64(len(randStrings)))]
 					m.Compute("hot", func(old string, _ bool) string {
-						return strconv.FormatUint(tag, 10)
+						return next
 					})
 				}
 			})
