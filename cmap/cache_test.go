@@ -286,6 +286,44 @@ func TestLoadOrStoreConcurrent(t *testing.T) {
 	}
 }
 
+// TestLoadAndDeleteConcurrent — N goroutines racing to LoadAndDelete the same key.
+// Exactly ONE should see loaded=true with the value; the rest see (zero, false).
+func TestLoadAndDeleteConcurrent(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			const goroutines = 64
+			m := f.make(1)
+			m.Store("k", "v")
+
+			var winners int64
+			var wg sync.WaitGroup
+			wg.Add(goroutines)
+			for i := 0; i < goroutines; i++ {
+				go func() {
+					defer wg.Done()
+					v, loaded := m.LoadAndDelete("k")
+					if loaded {
+						if v != "v" {
+							t.Errorf("winner saw %q, want \"v\"", v)
+						}
+						atomic.AddInt64(&winners, 1)
+					} else if v != "" {
+						t.Errorf("loser saw %q, want zero", v)
+					}
+				}()
+			}
+			wg.Wait()
+
+			if winners != 1 {
+				t.Fatalf("winners: got %d, want 1", winners)
+			}
+			if _, ok := m.Load("k"); ok {
+				t.Fatal("key should be gone after all LoadAndDeletes")
+			}
+		})
+	}
+}
+
 // TestCompute — insert path, update path, and read-back verification for every impl.
 func TestCompute(t *testing.T) {
 	for _, f := range factories {
@@ -324,6 +362,52 @@ func TestCompute(t *testing.T) {
 			}
 			if v, _ := m.Load("k"); v != "first->second" {
 				t.Fatalf("post-update Load: got %q, want \"first->second\"", v)
+			}
+		})
+	}
+}
+
+// TestComputeReturnsZero — returning V's zero value from fn is a valid store,
+// NOT a delete. Every impl must preserve this contract.
+func TestComputeReturnsZero(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(1)
+			m.Store("k", "v")
+
+			newV, existed := m.Compute("k", func(_ string, _ bool) string {
+				return "" // zero value for string
+			})
+			if !existed || newV != "" {
+				t.Fatalf("zero-return update: got (%q, %v), want (\"\", true)", newV, existed)
+			}
+			v, ok := m.Load("k")
+			if !ok || v != "" {
+				t.Fatalf("post-Compute Load: got (%q, %v), want (\"\", true) — key must still exist with zero value", v, ok)
+			}
+		})
+	}
+}
+
+// TestComputeAfterDelete — after Delete, Compute must see exists=false and zero old.
+func TestComputeAfterDelete(t *testing.T) {
+	for _, f := range factories {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.make(1)
+			m.Store("k", "prior")
+			m.Delete("k")
+
+			newV, existed := m.Compute("k", func(old string, exists bool) string {
+				if exists {
+					t.Fatalf("exists should be false after Delete, got true (old=%q)", old)
+				}
+				if old != "" {
+					t.Fatalf("old should be zero, got %q", old)
+				}
+				return "fresh"
+			})
+			if existed || newV != "fresh" {
+				t.Fatalf("post-delete Compute: got (%q, %v), want (\"fresh\", false)", newV, existed)
 			}
 		})
 	}

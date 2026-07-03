@@ -13,6 +13,24 @@
 // So callers can pick the one that matches their workload and swap without
 // touching call sites. Every implementation supports Delete.
 //
+// Semantics of the read-modify-write methods:
+//
+//   - LoadOrStore does NOT overwrite: on a hit, the stored value is unchanged
+//     and the caller's v is discarded.
+//   - LoadAndDelete atomically returns the value and removes the key. On miss,
+//     returns the zero value of V and loaded=false.
+//   - Compute always writes: returning the zero value from fn stores the zero
+//     value; there is no "leave the entry alone" or "delete" signal from fn.
+//     If you need conditional delete, do it explicitly with Delete.
+//
+// SyncMap.Compute has an extra caveat: it relies on sync.Map.CompareAndSwap
+// and therefore requires V to be a runtime-comparable type. If your V is a
+// slice, map, or function type, use ShardedMap or MutexMap instead.
+//
+// Len is only on ShardedMap: sync.Map has no O(1) size, and MutexMap /
+// RWMutexMap are single-lock so adding Len there would be trivial but out
+// of scope for this interface (which focuses on per-key operations).
+//
 // The implementations are:
 //
 //   - MutexMap:   a plain map guarded by a sync.Mutex. Simple; scales

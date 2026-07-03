@@ -89,8 +89,55 @@ func BenchmarkMaps(b *testing.B) {
 
 				nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
 				b.ReportMetric(1000.0/nsPerOp, "Mops/s")
-				b.ReportMetric(0, "ns/op") // suppress noise; keep b.N & Mops/s
 			})
 		}
+	}
+}
+
+func BenchmarkLoadOrStore(b *testing.B) {
+	for _, im := range impls {
+		b.Run(im.name, func(b *testing.B) {
+			m := im.make(numKeys)
+			prewarm(m)
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			b.RunParallel(func(pb *testing.PB) {
+				r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+				for pb.Next() {
+					k := keys[r.Uint64N(numKeys)]
+					_, _ = m.LoadOrStore(k, k)
+				}
+			})
+
+			nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+			b.ReportMetric(1000.0/nsPerOp, "Mops/s")
+		})
+	}
+}
+
+func BenchmarkCompute(b *testing.B) {
+	for _, im := range impls {
+		b.Run(im.name, func(b *testing.B) {
+			m := im.make(numKeys)
+			prewarm(m)
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			b.RunParallel(func(pb *testing.PB) {
+				r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+				for pb.Next() {
+					k := keys[r.Uint64N(numKeys)]
+					m.Compute(k, func(old string, _ bool) string {
+						return old // no-op update; measures overhead of Compute itself
+					})
+				}
+			})
+
+			nsPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+			b.ReportMetric(1000.0/nsPerOp, "Mops/s")
+		})
 	}
 }

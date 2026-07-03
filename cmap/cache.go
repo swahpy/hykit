@@ -130,8 +130,18 @@ func (m *RWMutexMap[K, V]) Delete(k K) {
 }
 
 func (m *RWMutexMap[K, V]) LoadOrStore(k K, v V) (V, bool) {
+	// Hit-fast path: read lock is enough when the key already exists.
+	m.mu.RLock()
+	if existing, ok := m.m[k]; ok {
+		m.mu.RUnlock()
+		return existing, true
+	}
+	m.mu.RUnlock()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Re-check after upgrading — someone else may have inserted while we were
+	// waiting for the write lock.
 	if existing, ok := m.m[k]; ok {
 		return existing, true
 	}
@@ -162,8 +172,7 @@ func (m *RWMutexMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
 
 // SyncMap is a generic wrapper around sync.Map.
 type SyncMap[K comparable, V any] struct {
-	m         sync.Map
-	computeMu sync.Mutex // serializes Compute calls; Load/Store/Delete/etc. remain lock-free
+	m sync.Map
 }
 
 // NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes no capacity hint — and is kept for API symmetry with the other constructors.
@@ -199,18 +208,34 @@ func (m *SyncMap[K, V]) LoadAndDelete(k K) (V, bool) {
 	return v.(V), true
 }
 
+// Compute — see Map.Compute. NOTE: on SyncMap this uses sync.Map's
+// CompareAndSwap under the hood, which requires V to be a runtime-comparable
+// type. Storing non-comparable V (slices, maps, functions) will panic when
+// Compute is called. If your V is not comparable, use ShardedMap or
+// MutexMap instead. fn may run more than once under contention; keep it
+// side-effect-free.
 func (m *SyncMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
-	m.computeMu.Lock()
-	defer m.computeMu.Unlock()
-	var old V
-	existed := false
-	if raw, ok := m.m.Load(k); ok {
-		old = raw.(V)
-		existed = true
+	for {
+		raw, existed := m.m.Load(k)
+		var old V
+		if existed {
+			old = raw.(V)
+		}
+		newV := fn(old, existed)
+
+		if existed {
+			// Swap only if the value is still what we read.
+			if m.m.CompareAndSwap(k, raw, newV) {
+				return newV, true
+			}
+		} else {
+			// Insert only if nobody stored anything in the meantime.
+			if _, loaded := m.m.LoadOrStore(k, newV); !loaded {
+				return newV, false
+			}
+		}
+		// Contended path: someone changed the entry, retry.
 	}
-	newV := fn(old, existed)
-	m.m.Store(k, newV)
-	return newV, existed
 }
 
 // --- Sharded Map ---
