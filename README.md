@@ -17,7 +17,9 @@ go get github.com/swahpy/hykit@latest
 
 ### `cmap` — Concurrent map implementations
 
-> **v0.2.0 breaking change:** the interface is now generic (`Map[K comparable, V any]`) and every implementation supports `Delete`. Users of v0.1.0 must add explicit type parameters to constructor calls.
+> **v0.2.0:** the interface became generic (`Map[K comparable, V any]`) and every implementation supports `Delete`.
+>
+> **v0.3.0:** added `LoadOrStore`, `LoadAndDelete`, and `Compute` to the `Map` interface. Users of the four concrete types are unaffected; anyone who wrote their own `Map` implementation must add the three new methods.
 
 Four `Map` implementations behind a shared interface, benchmarked head-to-head:
 
@@ -32,7 +34,19 @@ import "github.com/swahpy/hykit/cmap"
 m := cmap.NewShardedMap[string, string](1_000_000)
 m.Store("hello", "world")
 v, ok := m.Load("hello") // "world", true
-m.Delete("hello")
+
+// Atomic "if absent, store" — perfect for one-time init.
+actual, loaded := m.LoadOrStore("hello", "again")
+// actual == "world", loaded == true (existing value kept)
+
+// Atomically take a value out.
+v, ok = m.LoadAndDelete("hello") // "world", true
+
+// Read-modify-write in one atomic step. Perfect for counters or list append.
+counters := cmap.NewShardedMap[string, int](0)
+counters.Compute("clicks", func(old int, _ bool) int {
+    return old + 1
+})
 ```
 
 Run benchmarks:
