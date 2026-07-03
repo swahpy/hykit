@@ -5,10 +5,20 @@ import (
 	"sync"
 )
 
-// Map is the common interface satisfied by every implementation in this package.
+// Map is what every impl in this package satisfies. All methods are safe
+// to call concurrently. Individual calls are atomic; combining Load with
+// a follow-up Store is not race-free — other goroutines can slip in
+// between. Use LoadOrStore, LoadAndDelete, or Compute when you need
+// "check then act" atomicity.
 type Map[K comparable, V any] interface {
-	Load(k K) (V, bool)
+	// Load returns the stored value for k. ok is true if the key was there;
+	// on a miss, v is the zero value of V.
+	Load(k K) (v V, ok bool)
+
+	// Store sets k to v. Overwrites any existing value.
 	Store(k K, v V)
+
+	// Delete removes k. No-op (not a panic) if k isn't there.
 	Delete(k K)
 
 	// LoadOrStore returns the existing value for the key if present; otherwise
@@ -18,7 +28,8 @@ type Map[K comparable, V any] interface {
 	LoadOrStore(k K, v V) (actual V, loaded bool)
 
 	// LoadAndDelete atomically loads the value for the key and deletes it.
-	// loaded is true iff the key was present before the call.
+	// loaded is true iff the key was present before the call. On a miss,
+	// value is the zero value of V.
 	LoadAndDelete(k K) (value V, loaded bool)
 
 	// Compute atomically transforms the value for k. fn is called under the
@@ -183,7 +194,8 @@ type SyncMap[K comparable, V any] struct {
 	m sync.Map
 }
 
-// NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes no capacity hint — and is kept for API symmetry with the other constructors.
+// NewSyncMap returns a SyncMap. The size argument is ignored — sync.Map takes
+// no capacity hint — and is kept for API symmetry with the other constructors.
 func NewSyncMap[K comparable, V any](_ int) *SyncMap[K, V] { return &SyncMap[K, V]{} }
 
 // Load returns the value for k and whether it was present.
