@@ -55,19 +55,6 @@ Run benchmarks:
 go test -bench . -benchmem -run=^$ -cpu=1,2,4,8 -benchtime=2s ./cmap/
 ```
 
-## Roadmap
-
-| Month | Planned                                                               |
-| ----- | --------------------------------------------------------------------- |
-| 1     | `cmap` (done), scaffold, CI, `v0.1.0`                                 |
-| 2     | `slice` (generic helpers) + `retry` (backoff)                         |
-| 3     | `pool` (generic object pool)                                          |
-| 4     | `set` + `stringx`                                                     |
-| 5     | `timex` + `errx`                                                      |
-| 6     | Retrospective — keep expanding vs. pivot to a themed library          |
-
-The roadmap is a target, not a contract. Real usage drives priority.
-
 ## License
 
 MIT — see [LICENSE](./LICENSE).
