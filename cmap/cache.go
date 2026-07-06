@@ -233,7 +233,8 @@ func (m *SyncMap[K, V]) LoadAndDelete(k K) (V, bool) {
 // type. Storing non-comparable V (slices, maps, functions) will panic when
 // Compute is called. If your V is not comparable, use ShardedMap or
 // MutexMap instead. fn may run more than once under contention; keep it
-// side-effect-free.
+// side-effect-free. If your fn must have side effects, use ShardedMap or
+// MutexMap — their Compute runs fn exactly once under the shard/global lock.
 func (m *SyncMap[K, V]) Compute(k K, fn func(V, bool) V) (V, bool) {
 	for {
 		raw, existed := m.m.Load(k)
